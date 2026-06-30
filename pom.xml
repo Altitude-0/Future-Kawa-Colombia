@@ -7,7 +7,7 @@
 
     <groupId>com.futurekawa.colombia</groupId>
     <artifactId>fk-colombia-parent</artifactId>
-    <version>1.0.2-SNAPSHOT</version>
+    <version>1.0.2</version>
     <packaging>pom</packaging>
     <name>FutureKawa Colombia Parent</name>
 
