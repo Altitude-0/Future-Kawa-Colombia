@@ -1,0 +1,142 @@
+name: CI/CD - FutureKawa Colombia
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  pull_request:
+    branches:
+      - main
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    name: Build & Verify Instance
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: temurin
+          cache: maven
+
+      - name: Configure Maven for GitHub Packages
+        run: |
+          mkdir -p ~/.m2
+          echo "<settings><servers><server><id>github</id><username>${{ github.actor }}</username><password>${{ secrets.GITHUB_TOKEN }}</password></server></servers></settings>" > ~/.m2/settings.xml
+
+      - name: Build Projects
+        run: mvn clean package -DskipTests
+
+      - name: Verify Docker Builds
+        run: |
+          docker build -f fk-colombia-core/Dockerfile ./fk-colombia-core
+          docker build -f fk-colombia-mqtt/Dockerfile ./fk-colombia-mqtt
+          docker build -f fk-colombia-alerting/Dockerfile ./fk-colombia-alerting
+
+      - name: Temporarily save JARs for publish job
+        uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: build-artifacts
+          path: "*/target/*.jar"
+          retention-days: 1
+
+  publish-docker:
+    needs: build-and-verify
+    runs-on: ubuntu-latest
+    name: Publish Images to GHCR
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download JARs from build step
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+
+      - name: Set lowercase repository owner
+        run: echo "REPOSITORY_OWNER_LOWER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Extract Tag Version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Login to GHCR
+        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Build and Push Core Image
+        run: |
+          docker build \
+            -t ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_LOWER }}/fk-colombia-core:latest \
+            -t ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_LOWER }}/fk-colombia-core:${{ env.VERSION }} \
+            -f fk-colombia-core/Dockerfile ./fk-colombia-core
+          docker push ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_LOWER }}/fk-colombia-core:latest
+          docker push ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_LOWER }}/fk-colombia-core:${{ env.VERSION }}
+
+      - name: Build and Push MQTT Image
+        run: |
+          docker build \
+            -t ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_LOWER }}/fk-colombia-mqtt:latest \
+            -t ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_LOWER }}/fk-colombia-mqtt:${{ env.VERSION }} \
+            -f fk-colombia-mqtt/Dockerfile ./fk-colombia-mqtt
+          docker push ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_LOWER }}/fk-colombia-mqtt:latest
+          docker push ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_LOWER }}/fk-colombia-mqtt:${{ env.VERSION }}
+
+      - name: Build and Push Alerting Image
+        run: |
+          docker build \
+            -t ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_LOWER }}/fk-colombia-alerting:latest \
+            -t ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_LOWER }}/fk-colombia-alerting:${{ env.VERSION }} \
+            -f fk-colombia-alerting/Dockerfile ./fk-colombia-alerting
+          docker push ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_LOWER }}/fk-colombia-alerting:latest
+          docker push ${{ env.REGISTRY }}/${{ env.REPOSITORY_OWNER_LOWER }}/fk-colombia-alerting:${{ env.VERSION }}
+
+  notify-discord:
+    needs: [build-and-verify]
+    runs-on: ubuntu-latest
+    name: Notify Discord
+    if: always() && (github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/v'))
+    steps:
+      - name: Send PR Notification
+        if: github.event_name == 'pull_request' && needs.build-and-verify.result == 'success'
+        run: |
+          PAYLOAD=$(cat <<INNER_EOF
+          {
+            "content": "🇨🇴 **New Pull Request for FK-Colombia validated!**",
+            "embeds": [{
+              "title": "Integration Build Successful",
+              "description": "The CI has successfully built the Colombia instance for PR #${{ github.event.pull_request.number }}.",
+              "color": 3447003,
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          INNER_EOF
+          )
+          curl -H "Content-Type: application/json" -d "$PAYLOAD" ${{ secrets.DISCORD_WEBHOOK }}
+
+      - name: Send Release Notification
+        if: startsWith(github.ref, 'refs/tags/v') && needs.publish-docker.result == 'success'
+        run: |
+          PAYLOAD=$(cat <<INNER_EOF
+          {
+            "content": "🎉 **New Release Published for FK-Colombia!**",
+            "embeds": [{
+              "title": "Release ${{ github.ref_name }} Deployed",
+              "description": "Docker images have been successfully pushed to GHCR.",
+              "color": 3066993,
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          INNER_EOF
+          )
+          curl -H "Content-Type: application/json" -d "$PAYLOAD" ${{ secrets.DISCORD_WEBHOOK }}

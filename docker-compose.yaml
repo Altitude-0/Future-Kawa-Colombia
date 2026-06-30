@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  # Base de données spécifique à la Colombie
+  db-colombia:
+    image: postgres:15-alpine
+    container_name: fk-colombia-db
+    environment:
+      - POSTGRES_DB=futurekawa_co
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5434:5432"
+
+  # RabbitMQ partagé pour l'instance
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: fk-colombia-rabbitmq
+    ports:
+      - "5674:5672"
+      - "15674:15672"
+
+  # Service Core Colombie
+  core-colombia:
+    build: ./fk-colombia-core
+    container_name: fk-colombia-core
+    depends_on:
+      - db-colombia
+      - rabbitmq
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://db-colombia:5432/futurekawa_co
+      - DB_USER=postgres
+      - DB_PASS=password
+      - SPRING_RABBITMQ_HOST=rabbitmq
+    ports:
+      - "8084:8080"
+
+  # Service MQTT Colombie
+  mqtt-colombia:
+    build: ./fk-colombia-mqtt
+    container_name: fk-colombia-mqtt
+    environment:
+      - SPRING_RABBITMQ_HOST=rabbitmq
+      - FUTUREKAWA_MQTT_BROKER_URL=tcp://mosquitto:1883
+    depends_on:
+      - rabbitmq
+      - core-colombia
+
+  # Service Alerting Colombie
+  alerting-colombia:
+    build: ./fk-colombia-alerting
+    container_name: fk-colombia-alerting
+    environment:
+      - SPRING_RABBITMQ_HOST=rabbitmq
+      - MAIL_HOST=mailhog
+      - MAIL_PORT=1025
+    depends_on:
+      - rabbitmq
+      - core-colombia
+
+  # Serveur Mail pour les tests
+  mailhog:
+    image: mailhog/mailhog
+    container_name: fk-colombia-mailhog
+    ports:
+      - "8027:8025"
+
+  # Broker Mosquitto pour les capteurs locaux
+  mosquitto:
+    build:
+      context: .
+      dockerfile: mosquitto.Dockerfile
+    container_name: fk-colombia-mosquitto
+    ports:
+      - "1885:1883"

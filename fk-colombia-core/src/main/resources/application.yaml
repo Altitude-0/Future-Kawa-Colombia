@@ -1,0 +1,24 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://db-colombia:5432/futurekawa_co
+    username: ${DB_USER:postgres}
+    password: ${DB_PASS:password}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: false
+
+futurekawa:
+  country: CO
+  init-script-path: db/scripts/seed_colombia.sql
+  temperature-ideal: 26.0
+  humidity-ideal: 80.0
+  temperature-tolerance: 3.0
+  humidity-tolerance: 2.0
+  alert:
+    recipient: alerts-co@futurekawa.com
